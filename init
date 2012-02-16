@@ -1,0 +1,107 @@
+#!/usr/bin/ruby
+
+puts "rb init starting"
+
+Dir.chdir '/'
+
+# ignore all signals (to prevent "panic: tried to kill init", eg on libc update)
+(1..32).each { |i| Signal.trap(i) { puts "init got sig #{i}" } rescue nil }
+# dont spam the console with this one
+Signal.trap('CHLD', 'DEFAULT')
+
+# pid => lambda called after wait
+@ondeath = {}
+# true when we are shutting down (ctrl-alt-suppr)
+@want_shutdown = false
+
+# create a subprocess running the block, returns the child pid
+def subprocess
+	if not pid = Process.fork
+		yield
+		exit!
+	end
+	pid
+end
+
+# fork & exec, returns child pid
+def subexec(str)
+	subprocess { exec(*str.split(' ')) }
+end
+
+# fork & exec & reexec on death
+def respawn(str)
+	@ondeath[subexec(str)] = lambda { sleep 0.1 ; respawn str unless @want_shutdown }
+end
+
+# calls Process.wait, handles @ondeath callbacks
+def wait(*a)
+	pid = Process.wait(*a)
+	if cb = @ondeath.delete(pid)
+		cb.call
+	end
+	pid
+end
+
+# shutdown-related stuff
+# sys_reboot constants
+RB_CAD_OFF = 0
+RB_POWER_OFF = 0x4321FEDC
+def sys_reboot(nr)
+	nr_reboot = (RUBY_PLATFORM =~ /i.86/) ? 88 : 169
+	Kernel.syscall(nr_reboot, 0xfee1dead-(1<<32), 672274793, nr, 0)
+end
+
+def sys_sync
+	nr_sync = (RUBY_PLATFORM =~ /i.86/) ? 36 : 162
+	Kernel.syscall(nr_sync)
+end
+
+# actually shut the system down
+# kills all processes, umounts filesystems, sync, and poweroff
+def shutdown
+	puts "rb init shutting down"
+	@want_shutdown = true
+	sys_sync
+	wait subexec '/bin/umount -a'
+	Process.kill('TERM', -1)
+	sleep 4	# TODO intelligent sleep
+	Process.kill('KILL', -1)
+	sleep 1
+	wait subexec '/bin/umount -a'
+	wait subexec '/bin/mount -oremount,ro /'
+	sys_sync
+	sys_reboot RB_POWER_OFF
+	puts "sys_reboot(poweroff) returned (bad)..."
+	exit!
+end
+
+# register sigint -> shutdown
+Signal.trap('INT') { shutdown }
+# make ctrl-alt-del send sigint
+sys_reboot RB_CAD_OFF
+
+# boot phase 1
+subexec '/bin/mount /proc'
+subexec '/bin/mount /sys'
+subexec '/bin/mount -oremount,rw /'
+Dir.mkdir('/dev/pts') rescue nil
+subexec '/bin/mount /dev/pts'
+subexec '/sbin/ureadahead --timeout=20'
+4.times { wait }
+
+# boot phase 2
+subexec '/bin/hostname -b -F /etc/hostname'
+subexec '/usr/bin/loadkeys /etc/console-setup/cached.kmap.gz'
+Dir['/etc/sysctl.d/*.conf'].each { |sf| subexec "/sbin/sysctl -q -p #{sf}" }
+subexec '/sbin/udevd --daemon'
+sleep 0.4
+subexec '/sbin/udevadm trigger'
+sleep 0.4
+subexec '/sbin/ifconfig lo up'
+subexec '/etc/rc.local'
+
+# gettys
+4.times { |i| respawn "/sbin/getty -8 38400 tty#{i+1}" }
+
+# wait loop
+loop { wait }
