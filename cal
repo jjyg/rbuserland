@@ -1,0 +1,62 @@
+#!/usr/bin/ruby
+
+NOW = Time.now
+
+TIOCGWINSZ = 0x5413
+s = ''.ljust(8)
+TERMW = $stdin.ioctl(TIOCGWINSZ, s) >= 0 ? s.unpack('SS')[1] : 80
+
+MW = 7*3 + 2
+
+def invert(s)
+ "\e[7m#{s}\e[27m"
+end
+
+# BWAHAHAHAHA
+def showmonth(m, y, nr=1)
+ obuf = ' ' * nr * MW
+ w = MW-4
+ off = 1
+ lines = []
+ invertme = []
+ nr.times {
+  t = Time.mktime(y, m, 1, 12)	# 12:00 to avoid DST issues
+  l = lines[0] ||= obuf.dup
+  l[off, w] = t.strftime('%B %Y').center(w)
+  l = lines[1] ||= obuf.dup
+  l[off, w] = 'Mo Tu We Th Fr Sa Su'
+  loff = 2
+  while t.month == m
+   l = lines[loff] ||= obuf.dup
+   wd = (t.wday-1) % 7
+   l[off+3*wd, 2] = '%2s' % t.day
+   invertme << [loff, off+3*wd, 2] if t.year == NOW.year and t.month == NOW.month and t.day == NOW.day
+   loff += 1 if wd == 6
+   t += 24*3600
+  end
+  off += MW
+  m += 1
+ }
+ invertme.each { |lo, o, l| lines[lo][o, l] = invert(lines[lo][o, l]) }
+ puts lines, ''
+end
+
+if ARGV.length == 2
+ m, y = ARGV.map { |i| i.to_i }.sort
+ showmonth(m, y)
+elsif ARGV.length == 1
+ m = ARGV[0].to_i
+ if m > 12 or m < 1
+  showmonth(1, m, 3)
+  showmonth(4, m, 3)
+  showmonth(7, m, 3)
+  showmonth(10, m, 3)
+ else
+  showmonth(m, NOW.year)
+ end
+else
+ nr = TERMW / MW
+ nr = 1 if nr < 1
+ nr = 4 if nr > 4
+ showmonth(NOW.month - (nr > 2 ? 1 : 0), NOW.year, nr)
+end
