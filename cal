@@ -19,6 +19,10 @@ def showmonth(m, y, nr=1)
  off = 1
  lines = []
  invertme = []
+ while m < 1
+    m += 12
+    y -= 1
+ end
  nr.times {
   t = Time.mktime(y, m, 1, 12)	# 12:00 to avoid DST issues
   l = lines[0] ||= obuf.dup
@@ -36,6 +40,10 @@ def showmonth(m, y, nr=1)
   end
   off += MW
   m += 1
+  if m > 12
+    m = 1
+    y += 1
+  end
  }
  invertme.each { |lo, o, l| lines[lo][o, l] = invert(lines[lo][o, l]) }
  puts lines, ''
